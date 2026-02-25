@@ -56,13 +56,13 @@ async def upload_identity_photo(identity_id: str, photo: UploadFile = File(...))
     if ext not in {"jpeg", "png"}:
         raise HTTPException(status_code=400, detail="Only JPEG and PNG images are allowed")
 
-    saved = storage.save_photo(identity_id, content, "jpg" if ext == "jpeg" else ext)
     image = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise HTTPException(status_code=400, detail="Could not decode image")
     embeddings = worker.face_engine.extract_embeddings_from_image(image)
     if not embeddings:
         raise HTTPException(status_code=400, detail="No face detected in image")
+    saved = storage.save_photo(identity_id, content, "jpg" if ext == "jpeg" else ext)
     latest = None
     for emb in embeddings:
         latest = storage.append_embedding(identity_id, emb, worker.face_engine.model_name)
@@ -90,12 +90,20 @@ def get_identity(identity_id: str) -> dict:
 
 @app.post("/stream/start", dependencies=[Depends(auth)])
 def start_stream(payload: StreamStartRequest) -> dict:
+    storage.write_active_stream(
+        {
+            "running": True,
+            "camera_id": payload.camera_id,
+            "rtsp_url": payload.rtsp_url,
+        }
+    )
     worker.enqueue("start_stream", {"camera_id": payload.camera_id, "rtsp_url": payload.rtsp_url})
     return {"running": True, "camera_id": payload.camera_id, "hls": "/hls/live/index.m3u8"}
 
 
 @app.post("/stream/stop", dependencies=[Depends(auth)])
 def stop_stream() -> dict:
+    storage.clear_active_stream()
     worker.enqueue("stop_stream", {})
     return {"running": False}
 
@@ -108,13 +116,13 @@ def stream_status() -> dict:
 @app.post("/attendance/start", dependencies=[Depends(auth)])
 def start_attendance(payload: AttendanceStartRequest) -> dict:
     status_payload = worker.get_status()
+    active = storage.read_active_stream()
+    if not active.get("running") or active.get("camera_id") != payload.camera_id:
+        raise HTTPException(
+            status_code=409,
+            detail="No running stream for this camera_id. Start stream first.",
+        )
     if not status_payload["running"]:
-        active = storage.read_active_stream()
-        if not active.get("running") or active.get("camera_id") != payload.camera_id:
-            raise HTTPException(
-                status_code=409,
-                detail="No running stream for this camera_id. Start stream first.",
-            )
         worker.enqueue(
             "start_stream",
             {
@@ -122,12 +130,11 @@ def start_attendance(payload: AttendanceStartRequest) -> dict:
                 "rtsp_url": active["rtsp_url"],
             },
         )
+    elif status_payload.get("camera_id") != payload.camera_id:
+        raise HTTPException(status_code=409, detail="Another camera stream is currently running")
     if status_payload.get("attendance_session_id"):
         raise HTTPException(status_code=409, detail="Another attendance session is already active")
-    stream = storage.read_active_stream()
-    if not stream.get("running"):
-        raise HTTPException(status_code=409, detail="No active stream metadata found")
-    session = storage.create_session(camera_id=payload.camera_id, rtsp_url=stream.get("rtsp_url", ""))
+    session = storage.create_session(camera_id=payload.camera_id, rtsp_url=active.get("rtsp_url", ""))
     worker.enqueue("start_attendance", {"session_id": session["session_id"]})
     return {"session_id": session["session_id"], "status": "active", "auto_stop_at": session["auto_stop_at"]}
 

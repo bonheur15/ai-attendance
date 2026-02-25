@@ -227,6 +227,7 @@ Errors:
 
 - `401` missing/invalid API key
 - `409` no running stream for this `camera_id`
+- `409` another camera stream is currently running
 - `409` another session already active
 - `422` invalid payload
 
