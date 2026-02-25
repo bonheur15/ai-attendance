@@ -1,0 +1,25 @@
+{
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "api_key": "change-me"
+  },
+  "rtsp": {
+    "read_timeout_ms": 5000,
+    "reconnect_backoff_ms": 700,
+    "max_consecutive_failures": 50
+  },
+  "pipeline": {
+    "detect_every_n_frames_cpu": 10,
+    "detect_every_n_frames_gpu": 6,
+    "recognize_cooldown_ms": 600,
+    "detector_input_width": 640,
+    "min_stable_ms": 700,
+    "similarity_threshold": 0.55
+  },
+  "hls": {
+    "output_dir": "data/hls/live",
+    "segment_time_sec": 2,
+    "list_size": 8
+  }
+}

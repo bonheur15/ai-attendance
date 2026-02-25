@@ -1,0 +1,1 @@
+"""Face attendance package."""
