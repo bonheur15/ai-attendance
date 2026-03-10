@@ -6,26 +6,6 @@
   },
   "streams": [
     {
-      "slug": "camera1",
-      "camera_id": "camera1",
-      "rtsp_url": "rtsp://100.77.11.70:8554/camera1"
-    },
-    {
-      "slug": "camera2",
-      "camera_id": "camera2",
-      "rtsp_url": "rtsp://100.77.11.70:8554/camera2"
-    },
-    {
-      "slug": "camera3",
-      "camera_id": "camera3",
-      "rtsp_url": "rtsp://100.77.11.70:8554/camera3"
-    },
-    {
-      "slug": "camera4",
-      "camera_id": "camera4",
-      "rtsp_url": "rtsp://100.77.11.70:8554/camera4"
-    },
-    {
       "slug": "camera5",
       "camera_id": "camera5",
       "rtsp_url": "rtsp://root:toor@100.123.149.84:9000/h264_aac.sdp"
