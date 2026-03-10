@@ -5,8 +5,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-import cv2
-
 from .utils import atomic_write_json, now_iso, read_json
 
 
@@ -193,6 +191,8 @@ class Storage:
     def save_recognition_snapshot(self, slug: str, identity_id: str, image_bgr: Any) -> str | None:
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             return None
+        import cv2
+
         person_dir = self.recognitions_root / slug / identity_id
         person_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.jpg"
