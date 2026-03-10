@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import cv2
 
 from .utils import atomic_write_json, now_iso, read_json
 
@@ -13,8 +16,9 @@ class Storage:
         self.identities_root = self.root / "identities"
         self.attendance_root = self.root / "attendance"
         self.sessions_root = self.attendance_root / "sessions"
+        self.recognitions_root = self.attendance_root / "recognitions"
         self.streams_root = self.root / "streams"
-        self.hls_root = self.root / "hls" / "live"
+        self.hls_root = self.root / "hls"
         self.logs_root = self.root / "logs"
         self.ensure_layout()
 
@@ -23,6 +27,7 @@ class Storage:
             self.identities_root,
             self.attendance_root,
             self.sessions_root,
+            self.recognitions_root,
             self.streams_root,
             self.hls_root,
             self.logs_root,
@@ -31,6 +36,9 @@ class Storage:
         index_path = self.attendance_root / "index.json"
         if not index_path.exists():
             atomic_write_json(index_path, {"latest_session_id": None, "sessions": []})
+        streams_path = self.streams_root / "active.json"
+        if not streams_path.exists():
+            atomic_write_json(streams_path, {"streams": {}})
 
     def identity_dir(self, identity_id: str) -> Path:
         return self.identities_root / identity_id
@@ -100,30 +108,43 @@ class Storage:
             out.append({"id": meta["id"], "name": meta["name"], "avg_embedding": avg})
         return out
 
-    def write_active_stream(self, payload: dict[str, Any]) -> None:
-        atomic_write_json(self.streams_root / "active.json", payload)
+    def hls_dir(self, slug: str) -> Path:
+        path = self.hls_root / slug
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
-    def clear_active_stream(self) -> None:
-        atomic_write_json(self.streams_root / "active.json", {"running": False})
+    def save_stream_status(self, slug: str, payload: dict[str, Any]) -> None:
+        path = self.streams_root / "active.json"
+        current = read_json(path, default={"streams": {}})
+        current.setdefault("streams", {})
+        current["streams"][slug] = payload
+        atomic_write_json(path, current)
 
-    def read_active_stream(self) -> dict[str, Any]:
-        return read_json(self.streams_root / "active.json", default={"running": False})
+    def clear_stream_status(self, slug: str) -> None:
+        self.save_stream_status(slug, {"running": False, "slug": slug, "updated_at": now_iso()})
 
-    def create_session(self, camera_id: str, rtsp_url: str) -> dict[str, Any]:
-        from datetime import datetime, timezone
+    def list_stream_statuses(self) -> dict[str, Any]:
+        data = read_json(self.streams_root / "active.json", default={"streams": {}})
+        return data.get("streams", {})
 
+    def read_stream_status(self, slug: str) -> dict[str, Any]:
+        return self.list_stream_statuses().get(slug, {"running": False, "slug": slug})
+
+    def create_session(self, slug: str, camera_id: str, rtsp_url: str, duration_sec: int, hls_path: str) -> dict[str, Any]:
         ts = datetime.now(timezone.utc)
-        session_id = f"sess_{ts.strftime('%Y%m%d_%H%M%S')}_{camera_id}"
+        session_id = f"sess_{ts.strftime('%Y%m%d_%H%M%S')}_{slug}"
         started_at = now_iso()
-        auto_stop = (ts.timestamp() + 3600)
+        auto_stop_at = (ts + timedelta(seconds=duration_sec)).isoformat()
         session = {
             "session_id": session_id,
+            "slug": slug,
             "camera_id": camera_id,
             "rtsp_url": rtsp_url,
+            "hls": hls_path,
             "started_at": started_at,
             "ended_at": None,
             "status": "active",
-            "auto_stop_at": datetime.fromtimestamp(auto_stop, timezone.utc).isoformat(),
+            "auto_stop_at": auto_stop_at,
             "seen": {},
             "events": [],
         }
@@ -135,6 +156,7 @@ class Storage:
         index["sessions"].append(
             {
                 "session_id": session_id,
+                "slug": slug,
                 "camera_id": camera_id,
                 "started_at": started_at,
                 "ended_at": None,
@@ -167,6 +189,18 @@ class Storage:
             return
         session["events"].append(event)
         self.update_session(session_id, session)
+
+    def save_recognition_snapshot(self, slug: str, identity_id: str, image_bgr: Any) -> str | None:
+        if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
+            return None
+        person_dir = self.recognitions_root / slug / identity_id
+        person_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.jpg"
+        out_path = person_dir / filename
+        ok = cv2.imwrite(str(out_path), image_bgr)
+        if not ok:
+            return None
+        return f"/recognitions/{slug}/{identity_id}/{filename}"
 
     def append_embedding(self, identity_id: str, embedding: list[float], model_name: str) -> dict[str, Any]:
         data = self.load_embeddings(identity_id)

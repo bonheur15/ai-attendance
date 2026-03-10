@@ -1,9 +1,16 @@
 {
   "api": {
     "host": "0.0.0.0",
-    "port": 8000,
+    "port": 8001,
     "api_key": "change-me"
   },
+  "streams": [
+    {
+      "slug": "cam1",
+      "camera_id": "cam1",
+      "rtsp_url": "rtsp://user:pass@camera-1/stream1"
+    }
+  ],
   "rtsp": {
     "read_timeout_ms": 5000,
     "reconnect_backoff_ms": 700,
@@ -15,10 +22,11 @@
     "recognize_cooldown_ms": 600,
     "detector_input_width": 640,
     "min_stable_ms": 700,
-    "similarity_threshold": 0.55
+    "similarity_threshold": 0.55,
+    "attendance_duration_sec": 60
   },
   "hls": {
-    "output_dir": "data/hls/live",
+    "output_dir": "data/hls",
     "segment_time_sec": 2,
     "list_size": 8
   }

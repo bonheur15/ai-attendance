@@ -1,19 +1,19 @@
-# API Test Guide (`curl` + Expected Results)
+# API Test Guide
 
-Base URL:
+Base values:
 
 ```bash
-BASE_URL="http://localhost:8000"
+BASE_URL="http://localhost:8001"
 API_KEY="change-me"
 ```
 
-Common header:
+Common auth header:
 
 ```bash
 -H "X-API-Key: $API_KEY"
 ```
 
-## 1) Health
+## Health
 
 ### `GET /health`
 
@@ -24,14 +24,15 @@ curl -s "$BASE_URL/health"
 Expected `200`:
 
 ```json
-{ "ok": true }
+{
+  "ok": true,
+  "configured_streams": 1
+}
 ```
 
-## 2) Identities
+## Identities
 
 ### `POST /identities`
-
-Create or update identity metadata.
 
 ```bash
 curl -s -X POST "$BASE_URL/identities" \
@@ -46,19 +47,17 @@ Expected `200`:
 {
   "id": "S001",
   "name": "Alice",
-  "created_at": "2026-02-25T16:00:00+00:00",
-  "updated_at": "2026-02-25T16:00:00+00:00"
+  "created_at": "2026-03-10T09:00:00+00:00",
+  "updated_at": "2026-03-10T09:00:00+00:00"
 }
 ```
 
 Errors:
 
-- `401` missing/invalid API key
-- `422` invalid payload (`id` or `name` missing/empty)
+- `401` invalid or missing `X-API-Key`
+- `422` invalid body
 
 ### `POST /identities/{id}/photos`
-
-Upload JPEG/PNG image; at least one face must be detected.
 
 ```bash
 curl -s -X POST "$BASE_URL/identities/S001/photos" \
@@ -80,12 +79,12 @@ Expected `200`:
 
 Errors:
 
-- `400` invalid file format (non JPEG/PNG)
-- `400` image decode failed
+- `400` unsupported file type
+- `400` decode failure
 - `400` no face detected
 - `404` identity not found
-- `413` image too large (>8MB)
-- `401` missing/invalid API key
+- `413` image larger than 8 MB
+- `500` no configured streams available
 
 ### `GET /identities`
 
@@ -101,10 +100,6 @@ Expected `200`:
 ]
 ```
 
-Errors:
-
-- `401` missing/invalid API key
-
 ### `GET /identities/{id}`
 
 ```bash
@@ -118,13 +113,13 @@ Expected `200`:
   "meta": {
     "id": "S001",
     "name": "Alice",
-    "created_at": "2026-02-25T16:00:00+00:00",
-    "updated_at": "2026-02-25T16:02:00+00:00"
+    "created_at": "2026-03-10T09:00:00+00:00",
+    "updated_at": "2026-03-10T09:02:00+00:00"
   },
   "photos": ["001.jpg"],
   "embeddings": {
     "model": "opencv-hist-fallback",
-    "updated_at": "2026-02-25T16:02:00+00:00",
+    "updated_at": "2026-03-10T09:02:00+00:00",
     "embeddings": [[0.01, 0.02]],
     "avg_embedding": [0.01, 0.02]
   }
@@ -134,17 +129,37 @@ Expected `200`:
 Errors:
 
 - `404` identity not found
-- `401` missing/invalid API key
 
-## 3) Stream Control
+## Streams
 
-### `POST /stream/start`
+Streams are loaded from `config.json` and start automatically when the server boots.
+
+### `GET /streams`
 
 ```bash
-curl -s -X POST "$BASE_URL/stream/start" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -d '{"camera_id":"cam1","rtsp_url":"rtsp://user:pass@camera/stream1"}'
+curl -s "$BASE_URL/streams" -H "X-API-Key: $API_KEY"
+```
+
+Expected `200`:
+
+```json
+[
+  {
+    "slug": "cam1",
+    "camera_id": "cam1",
+    "rtsp_url": "rtsp://***:***@camera-1/stream1",
+    "running": true,
+    "attendance_session_id": null,
+    "hls": "/hls/cam1/index.m3u8",
+    "gpu_enabled": false
+  }
+]
+```
+
+### `GET /streams/{slug}/status`
+
+```bash
+curl -s "$BASE_URL/streams/cam1/status" -H "X-API-Key: $API_KEY"
 ```
 
 Expected `200`:
@@ -152,84 +167,48 @@ Expected `200`:
 ```json
 {
   "running": true,
+  "slug": "cam1",
   "camera_id": "cam1",
-  "hls": "/hls/live/index.m3u8"
+  "rtsp_url": "rtsp://***:***@camera-1/stream1",
+  "hls": "/hls/cam1/index.m3u8",
+  "attendance_session_id": null,
+  "gpu_enabled": false,
+  "updated_at": "2026-03-10T09:03:00+00:00"
 }
 ```
 
 Errors:
 
-- `401` missing/invalid API key
-- `422` invalid payload
+- `404` stream slug not found
 
-### `POST /stream/stop`
+## Attendance
 
-```bash
-curl -s -X POST "$BASE_URL/stream/stop" -H "X-API-Key: $API_KEY"
-```
+Attendance sessions are activated per slug and auto-stop after `pipeline.attendance_duration_sec`. The current default is `60` seconds.
 
-Expected `200`:
-
-```json
-{ "running": false }
-```
-
-Errors:
-
-- `401` missing/invalid API key
-
-### `GET /stream/status`
+### `POST /attendance/activate/{slug}`
 
 ```bash
-curl -s "$BASE_URL/stream/status" -H "X-API-Key: $API_KEY"
+curl -s -X POST "$BASE_URL/attendance/activate/cam1" \
+  -H "X-API-Key: $API_KEY"
 ```
 
 Expected `200`:
 
 ```json
 {
-  "running": true,
-  "camera_id": "cam1",
-  "hls": "/hls/live/index.m3u8",
-  "attendance_session_id": "sess_20260225_160500_cam1",
-  "gpu_enabled": false
-}
-```
-
-Errors:
-
-- `401` missing/invalid API key
-
-## 4) Attendance
-
-### `POST /attendance/start`
-
-Starts a 1-hour session. Requires an active stream for the same camera.
-
-```bash
-curl -s -X POST "$BASE_URL/attendance/start" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -d '{"camera_id":"cam1"}'
-```
-
-Expected `200`:
-
-```json
-{
-  "session_id": "sess_20260225_160500_cam1",
+  "session_id": "sess_20260310_090500_cam1",
+  "slug": "cam1",
   "status": "active",
-  "auto_stop_at": "2026-02-25T17:05:00+00:00"
+  "auto_stop_at": "2026-03-10T09:06:00+00:00",
+  "hls": "/hls/cam1/index.m3u8"
 }
 ```
 
 Errors:
 
-- `401` missing/invalid API key
-- `409` no running stream for this `camera_id`
-- `409` another camera stream is currently running
-- `409` another session already active
-- `422` invalid payload
+- `404` stream slug not found
+- `409` attendance already active for this slug
+- `401` invalid or missing `X-API-Key`
 
 ### `POST /attendance/stop`
 
@@ -237,24 +216,24 @@ Errors:
 curl -s -X POST "$BASE_URL/attendance/stop" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
-  -d '{"session_id":"sess_20260225_160500_cam1"}'
+  -d '{"session_id":"sess_20260310_090500_cam1"}'
 ```
 
 Expected `200`:
 
 ```json
 {
-  "session_id": "sess_20260225_160500_cam1",
+  "session_id": "sess_20260310_090500_cam1",
+  "slug": "cam1",
   "status": "ended",
-  "ended_at": "2026-02-25T16:30:00+00:00"
+  "ended_at": "2026-03-10T09:05:25+00:00"
 }
 ```
 
 Errors:
 
-- `401` missing/invalid API key
 - `404` session not found
-- `422` invalid payload
+- `422` invalid body
 
 ### `GET /attendance/sessions`
 
@@ -267,23 +246,20 @@ Expected `200`:
 ```json
 [
   {
-    "session_id": "sess_20260225_160500_cam1",
+    "session_id": "sess_20260310_090500_cam1",
+    "slug": "cam1",
     "camera_id": "cam1",
-    "started_at": "2026-02-25T16:05:00+00:00",
-    "ended_at": "2026-02-25T16:30:00+00:00",
+    "started_at": "2026-03-10T09:05:00+00:00",
+    "ended_at": "2026-03-10T09:06:00+00:00",
     "status": "ended"
   }
 ]
 ```
 
-Errors:
-
-- `401` missing/invalid API key
-
 ### `GET /attendance/sessions/{session_id}`
 
 ```bash
-curl -s "$BASE_URL/attendance/sessions/sess_20260225_160500_cam1" \
+curl -s "$BASE_URL/attendance/sessions/sess_20260310_090500_cam1" \
   -H "X-API-Key: $API_KEY"
 ```
 
@@ -291,30 +267,34 @@ Expected `200`:
 
 ```json
 {
-  "session_id": "sess_20260225_160500_cam1",
+  "session_id": "sess_20260310_090500_cam1",
+  "slug": "cam1",
   "camera_id": "cam1",
-  "rtsp_url": "rtsp://***:***@camera/stream1",
-  "started_at": "2026-02-25T16:05:00+00:00",
-  "ended_at": "2026-02-25T16:30:00+00:00",
+  "rtsp_url": "rtsp://***:***@camera-1/stream1",
+  "hls": "/hls/cam1/index.m3u8",
+  "started_at": "2026-03-10T09:05:00+00:00",
+  "ended_at": "2026-03-10T09:06:00+00:00",
   "status": "ended",
-  "auto_stop_at": "2026-02-25T17:05:00+00:00",
+  "auto_stop_at": "2026-03-10T09:06:00+00:00",
   "seen": {
     "S001": {
       "id": "S001",
       "name": "Alice",
-      "first_seen": "2026-02-25T16:06:15+00:00",
-      "last_seen": "2026-02-25T16:25:22+00:00",
-      "count": 14,
-      "best_similarity": 0.71
+      "first_seen": "2026-03-10T09:05:07+00:00",
+      "last_seen": "2026-03-10T09:05:41+00:00",
+      "count": 4,
+      "best_similarity": 0.71,
+      "latest_snapshot": "/recognitions/cam1/S001/20260310T090541000000Z.jpg"
     }
   },
   "events": [
     {
-      "ts": "2026-02-25T16:06:15+00:00",
+      "ts": "2026-03-10T09:05:07+00:00",
       "type": "recognized",
       "id": "S001",
       "name": "Alice",
-      "similarity": 0.66
+      "similarity": 0.66,
+      "snapshot": "/recognitions/cam1/S001/20260310T090507000000Z.jpg"
     }
   ]
 }
@@ -322,28 +302,32 @@ Expected `200`:
 
 Errors:
 
-- `401` missing/invalid API key
 - `404` session not found
 
-## 5) HLS Playback
+## HLS and Recognition Images
 
-Once stream is running:
+The Python server serves both media types directly.
+
+### HLS playlist
 
 ```bash
-curl -i "$BASE_URL/hls/live/index.m3u8"
+curl -i "$BASE_URL/hls/cam1/index.m3u8"
 ```
 
 Expected:
 
-- `200` + playlist content, if worker already produced segments
-- `404` with:
+- `200` with the HLS playlist when FFmpeg has produced segments
+- `404` until the first playlist exists
 
-```json
-{ "detail": "HLS playlist not available yet" }
+### Recognition image
+
+Use a `snapshot` or `latest_snapshot` path returned by a session:
+
+```bash
+curl -O "$BASE_URL/recognitions/cam1/S001/20260310T090507000000Z.jpg"
 ```
 
-## Notes
+Expected:
 
-- RTSP credentials are masked in session read responses.
-- Attendance recognition events are written only after stable recognition (`min_stable_ms`).
-- Worker auto-stops attendance session after 1 hour.
+- `200` with the JPEG file
+- `404` if the file does not exist

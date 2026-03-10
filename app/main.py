@@ -1,42 +1,41 @@
 from __future__ import annotations
 
 import imghdr
-from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 from .config import load_config
-from .schemas import AttendanceStartRequest, AttendanceStopRequest, IdentityUpsert, StreamStartRequest
+from .schemas import AttendanceStopRequest, IdentityUpsert
 from .security import api_key_dependency
 from .storage import Storage
-from .worker import StreamWorker
+from .worker import StreamManager
 
 cfg = load_config()
 storage = Storage(root="data")
-worker = StreamWorker(storage=storage, config=cfg.raw)
+manager = StreamManager(storage=storage, config=cfg.raw)
 auth = api_key_dependency(cfg.api.get("api_key", ""))
 
-app = FastAPI(title="Face Attendance RTSP->HLS", version="1.0.0")
+app = FastAPI(title="Face Attendance RTSP->HLS", version="2.0.0")
 app.mount("/hls", StaticFiles(directory="data/hls"), name="hls")
+app.mount("/recognitions", StaticFiles(directory="data/attendance/recognitions"), name="recognitions")
 
 
 @app.on_event("startup")
 def on_startup() -> None:
-    worker.start_background()
+    manager.start_background()
 
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
-    worker.shutdown()
+    manager.shutdown()
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True}
+    return {"ok": True, "configured_streams": len(cfg.raw.get("streams", []))}
 
 
 @app.post("/identities", dependencies=[Depends(auth)])
@@ -59,18 +58,27 @@ async def upload_identity_photo(identity_id: str, photo: UploadFile = File(...))
     image = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise HTTPException(status_code=400, detail="Could not decode image")
-    embeddings = worker.face_engine.extract_embeddings_from_image(image)
+
+    embeddings = None
+    model_name = "opencv-hist-fallback"
+    for worker in manager.workers.values():
+        embeddings = worker.face_engine.extract_embeddings_from_image(image)
+        model_name = worker.face_engine.model_name
+        break
+    if embeddings is None:
+        raise HTTPException(status_code=500, detail="No configured streams available to initialize face engine")
     if not embeddings:
         raise HTTPException(status_code=400, detail="No face detected in image")
+
     saved = storage.save_photo(identity_id, content, "jpg" if ext == "jpeg" else ext)
     latest = None
     for emb in embeddings:
-        latest = storage.append_embedding(identity_id, emb, worker.face_engine.model_name)
+        latest = storage.append_embedding(identity_id, emb, model_name)
     return {
         "identity_id": identity_id,
         "photo_file": saved.name,
         "faces_detected": len(embeddings),
-        "embedding_model": worker.face_engine.model_name,
+        "embedding_model": model_name,
         "embeddings_total": len(latest["embeddings"]) if latest else 0,
     }
 
@@ -82,77 +90,55 @@ def list_identities() -> list[dict]:
 
 @app.get("/identities/{identity_id}", dependencies=[Depends(auth)])
 def get_identity(identity_id: str) -> dict:
-    out = storage.get_identity(identity_id)
-    if not out:
+    identity = storage.get_identity(identity_id)
+    if not identity:
         raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
-    return out
+    return identity
 
 
-@app.post("/stream/start", dependencies=[Depends(auth)])
-def start_stream(payload: StreamStartRequest) -> dict:
-    storage.write_active_stream(
-        {
-            "running": True,
-            "camera_id": payload.camera_id,
-            "rtsp_url": payload.rtsp_url,
-        }
-    )
-    worker.enqueue("start_stream", {"camera_id": payload.camera_id, "rtsp_url": payload.rtsp_url})
-    return {"running": True, "camera_id": payload.camera_id, "hls": "/hls/live/index.m3u8"}
+@app.get("/streams", dependencies=[Depends(auth)])
+def list_streams() -> list[dict]:
+    return manager.list_streams()
 
 
-@app.post("/stream/stop", dependencies=[Depends(auth)])
-def stop_stream() -> dict:
-    storage.clear_active_stream()
-    worker.enqueue("stop_stream", {})
-    return {"running": False}
+@app.get("/streams/{slug}/status", dependencies=[Depends(auth)])
+def stream_status(slug: str) -> dict:
+    try:
+        status = manager.get_status(slug)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Stream slug {slug} not found") from None
+    status["rtsp_url"] = storage.sanitize_rtsp(status.get("rtsp_url", ""))
+    return status
 
 
-@app.get("/stream/status", dependencies=[Depends(auth)])
-def stream_status() -> dict:
-    return worker.get_status()
-
-
-@app.post("/attendance/start", dependencies=[Depends(auth)])
-def start_attendance(payload: AttendanceStartRequest) -> dict:
-    status_payload = worker.get_status()
-    active = storage.read_active_stream()
-    if not active.get("running") or active.get("camera_id") != payload.camera_id:
-        raise HTTPException(
-            status_code=409,
-            detail="No running stream for this camera_id. Start stream first.",
-        )
-    if not status_payload["running"]:
-        worker.enqueue(
-            "start_stream",
-            {
-                "camera_id": active["camera_id"],
-                "rtsp_url": active["rtsp_url"],
-            },
-        )
-    elif status_payload.get("camera_id") != payload.camera_id:
-        raise HTTPException(status_code=409, detail="Another camera stream is currently running")
-    if status_payload.get("attendance_session_id"):
-        raise HTTPException(status_code=409, detail="Another attendance session is already active")
-    session = storage.create_session(camera_id=payload.camera_id, rtsp_url=active.get("rtsp_url", ""))
-    worker.enqueue("start_attendance", {"session_id": session["session_id"]})
-    return {"session_id": session["session_id"], "status": "active", "auto_stop_at": session["auto_stop_at"]}
+@app.post("/attendance/activate/{slug}", dependencies=[Depends(auth)])
+def activate_attendance(slug: str) -> dict:
+    try:
+        session = manager.activate_attendance(slug)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Stream slug {slug} not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "session_id": session["session_id"],
+        "slug": session["slug"],
+        "status": session["status"],
+        "auto_stop_at": session["auto_stop_at"],
+        "hls": session["hls"],
+    }
 
 
 @app.post("/attendance/stop", dependencies=[Depends(auth)])
 def stop_attendance(payload: AttendanceStopRequest) -> dict:
-    session = storage.get_session(payload.session_id)
+    session = manager.stop_attendance(payload.session_id)
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {payload.session_id} not found")
-    if session["status"] != "active":
-        return {"session_id": payload.session_id, "status": session["status"], "ended_at": session.get("ended_at")}
-    session["status"] = "ended"
-    from .utils import now_iso
-
-    session["ended_at"] = now_iso()
-    storage.update_session(payload.session_id, session)
-    worker.enqueue("stop_attendance", {"session_id": payload.session_id})
-    return {"session_id": payload.session_id, "status": "ended", "ended_at": session["ended_at"]}
+    return {
+        "session_id": session["session_id"],
+        "slug": session["slug"],
+        "status": session["status"],
+        "ended_at": session.get("ended_at"),
+    }
 
 
 @app.get("/attendance/sessions", dependencies=[Depends(auth)])
@@ -171,12 +157,10 @@ def get_session(session_id: str) -> dict:
 
 @app.get("/")
 def root() -> dict:
-    return {"service": "face-attendance", "docs": "/docs", "hls_example": "/hls/live/index.m3u8"}
-
-
-@app.get("/hls/live/index.m3u8")
-def get_hls_index():
-    playlist = Path("data/hls/live/index.m3u8")
-    if not playlist.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="HLS playlist not available yet")
-    return FileResponse(path=playlist, media_type="application/vnd.apple.mpegurl")
+    return {
+        "service": "face-attendance",
+        "docs": "/docs",
+        "streams_endpoint": "/streams",
+        "hls_example": "/hls/<slug>/index.m3u8",
+        "recognitions_example": "/recognitions/<slug>/<person_id>/<file>.jpg",
+    }

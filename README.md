@@ -1,82 +1,76 @@
 # Face Attendance RTSP -> HLS (Python, JSON Storage)
 
-Production-style MVP implementation of the system in `.material/design.md`.
+The server reads a configured list of RTSP streams from `config.json`, starts them automatically on boot, produces HLS per stream slug, and serves both HLS playlists and recognition snapshots directly from FastAPI.
 
 ## Features
 
-- RTSP ingest and reconnect logic
-- Face detect + recognize overlays (`ID + Name + similarity`)
-- HLS output at `data/hls/live/index.m3u8`
+- Multi-stream startup from `config.json`
+- Per-slug HLS output at `/hls/<slug>/index.m3u8`
+- Per-person recognition snapshots at `/recognitions/<slug>/<person_id>/<file>.jpg`
+- Attendance activation by stream slug
+- Automatic session stop after `pipeline.attendance_duration_sec` seconds
 - Identity management with photo upload and embedding generation
-- Attendance sessions with per-student timestamps, counts, and similarity stats
-- CPU-first defaults, GPU auto-switch (`h264_nvenc`) when available
-- JSON-only persistence (no database)
+- CPU-first defaults with GPU encoder auto-detect
+- JSON-only persistence, no database
 - API key protection with `X-API-Key`
 
-## Tech Stack
-
-- FastAPI
-- OpenCV
-- NumPy
-- FFmpeg
-- Filesystem JSON storage
-
 ## Quick Start
-
-1. Create virtual environment and install dependencies:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
-2. Configure API key and runtime settings:
+If you want a separate config file:
 
 ```bash
-cp config.json config.local.json
-# edit config.local.json and set api.api_key
+CONFIG_PATH=config.local.json uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
-If you use `config.local.json`, set environment variable `CONFIG_PATH` and run with it:
+## Config
 
-```bash
-CONFIG_PATH=config.local.json uvicorn app.main:app --host 0.0.0.0 --port 8000
+`config.json` now contains the stream inventory:
+
+```json
+{
+  "streams": [
+    {
+      "slug": "cam1",
+      "camera_id": "cam1",
+      "rtsp_url": "rtsp://user:pass@camera-1/stream1"
+    }
+  ]
+}
 ```
 
-3. Default run:
+Important fields:
 
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-4. Open docs:
-
-- Swagger UI: `http://localhost:8000/docs`
-- HLS path: `http://localhost:8000/hls/live/index.m3u8`
-
-## Configuration
-
-Edit `config.json`:
-
-- `api.api_key`: required header key
+- `streams`: list of RTSP inputs started automatically
+- `pipeline.attendance_duration_sec`: session lifetime in seconds, default `60`
 - `pipeline.similarity_threshold`: recognition threshold
-- `pipeline.detect_every_n_frames_cpu/gpu`: speed vs accuracy
-- `hls.segment_time_sec`, `hls.list_size`: HLS behavior
+- `hls.segment_time_sec` and `hls.list_size`: HLS behavior
+- `api.api_key`: required request header
+
+## Python-served media
+
+- API docs: `http://localhost:8001/docs`
+- HLS playlist: `http://localhost:8001/hls/cam1/index.m3u8`
+- Recognition images: `http://localhost:8001/recognitions/cam1/S001/<timestamp>.jpg`
 
 ## Storage Layout
 
 ```text
 data/
   identities/<id>/{meta.json,photos/*,embeddings.json}
-  attendance/{index.json,sessions/<session_id>.json}
+  attendance/
+    index.json
+    sessions/<session_id>.json
+    recognitions/<slug>/<person_id>/*.jpg
   streams/active.json
-  hls/live/{index.m3u8,seg_*.ts}
+  hls/<slug>/{index.m3u8,seg_*.ts}
   logs/
 ```
 
-## API Documentation
-
-Full endpoint docs with test `curl` examples and expected responses/errors:
-
-- [docs/API.md](/home/bonheur/Desktop/Projects/ai/attendance/docs/API.md)
+Full endpoint documentation, including `curl`, success responses, and error cases, is in [docs/API.md](/home/bonheur/Desktop/Projects/ai/attendance/docs/API.md).
