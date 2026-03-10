@@ -24,6 +24,11 @@
       "slug": "camera4",
       "camera_id": "camera4",
       "rtsp_url": "rtsp://100.77.11.70:8554/camera4"
+    },
+    {
+      "slug": "camera5",
+      "camera_id": "camera5",
+      "rtsp_url": "rtsp://100.123.149.84:9000/h264_aac.sdp"
     }
   ],
   "rtsp": {
