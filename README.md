@@ -20,6 +20,7 @@ The server reads a configured list of RTSP streams from `config.json`, starts th
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python3 scripts/seed_sample_identities.py
 uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
@@ -52,6 +53,19 @@ Important fields:
 - `pipeline.similarity_threshold`: recognition threshold
 - `hls.segment_time_sec` and `hls.list_size`: HLS behavior
 - `api.api_key`: required request header
+
+## Sample identities
+
+To create two sample identity records in `data/identities`:
+
+```bash
+python3 scripts/seed_sample_identities.py
+```
+
+This creates:
+
+- `S001` -> `Alice Demo`
+- `S002` -> `Bob Demo`
 
 ## Python-served media
 

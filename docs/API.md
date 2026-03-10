@@ -32,6 +32,19 @@ Expected `200`:
 
 ## Identities
 
+### Seed two sample identities
+
+```bash
+python3 scripts/seed_sample_identities.py
+```
+
+Expected terminal output:
+
+```text
+seeded S001 -> Alice Demo
+seeded S002 -> Bob Demo
+```
+
 ### `POST /identities`
 
 ```bash
