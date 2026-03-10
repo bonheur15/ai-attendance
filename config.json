@@ -22,12 +22,12 @@
     "recognize_cooldown_ms": 600,
     "detector_input_width": 640,
     "min_stable_ms": 700,
-    "similarity_threshold": 0.55,
+    "similarity_threshold": 0.1,
     "attendance_duration_sec": 60
   },
   "hls": {
     "output_dir": "data/hls",
-    "segment_time_sec": 2,
-    "list_size": 8
+    "segment_time_sec": 5,
+    "list_size": 20
   }
 }
