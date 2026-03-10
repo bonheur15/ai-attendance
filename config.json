@@ -28,7 +28,7 @@
     {
       "slug": "camera5",
       "camera_id": "camera5",
-      "rtsp_url": "rtsp://100.123.149.84:9000/h264_aac.sdp"
+      "rtsp_url": "rtsp://root:toor@100.123.149.84:9000/h264_aac.sdp"
     }
   ],
   "rtsp": {
